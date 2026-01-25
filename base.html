@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>{{ title if title else "Placement Tracker" }}</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+  <nav class="nav">
+    <div class="nav-left">
+      <a class="brand" href="{{ url_for('dashboard') }}">Placement Tracker</a>
+    </div>
+    <div class="nav-right">
+      {% if session.get("user_id") %}
+        <span class="hello">Hi, {{ session.get("full_name") }}</span>
+        <a class="btn small ghost" href="{{ url_for('export_csv') }}">Export CSV</a>
+        <a class="btn small danger" href="{{ url_for('logout') }}">Logout</a>
+      {% else %}
+        <a class="btn small ghost" href="{{ url_for('login') }}">Login</a>
+        <a class="btn small" href="{{ url_for('signup') }}">Signup</a>
+      {% endif %}
+    </div>
+  </nav>
+
+  <main class="container">
+    {% with messages = get_flashed_messages(with_categories=True) %}
+      {% if messages %}
+        <div class="flash-wrap">
+          {% for category, message in messages %}
+            <div class="flash {{ category }}">{{ message }}</div>
+          {% endfor %}
+        </div>
+      {% endif %}
+    {% endwith %}
+
+    {% block content %}{% endblock %}
+  </main>
+
+  <footer class="footer">
+  <p>
+    Crafted by
+    <a href="https://www.linkedin.com/in/reva-saxena-61bb33342" target="_blank" rel="noopener noreferrer">Reva</a>
+  </p>
+</footer>
+
+</body>
+</html>
