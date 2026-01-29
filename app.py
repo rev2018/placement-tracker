@@ -55,6 +55,10 @@ def init_db():
     conn.close()
 
 
+# ✅ IMPORTANT: initialize DB on import (works on Render)
+init_db()
+
+
 # ---------------- Auth Helpers ----------------
 def login_required():
     if "user_id" not in session:
@@ -99,6 +103,7 @@ def signup():
             conn.close()
             flash("Account created! Please login.", "success")
             return redirect(url_for("login"))
+
         except sqlite3.IntegrityError:
             flash("Email already registered. Try logging in.", "warning")
             return redirect(url_for("login"))
@@ -109,27 +114,33 @@ def signup():
 @app.route("/login", methods=["GET", "POST"])
 def login():
     if request.method == "POST":
-        email = request.form.get("email", "").strip().lower()
-        password = request.form.get("password", "")
+        try:
+            email = request.form.get("email", "").strip().lower()
+            password = request.form.get("password", "")
 
-        if not email or not password:
-            flash("Email and password are required.", "danger")
+            if not email or not password:
+                flash("Email and password are required.", "danger")
+                return redirect(url_for("login"))
+
+            conn = get_db()
+            cur = conn.cursor()
+            cur.execute("SELECT * FROM users WHERE email = ?", (email,))
+            user = cur.fetchone()
+            conn.close()
+
+            if user and check_password_hash(user["password_hash"], password):
+                session["user_id"] = user["id"]
+                session["full_name"] = user["full_name"]
+                flash("Logged in successfully!", "success")
+                return redirect(url_for("dashboard"))
+
+            flash("Invalid credentials. Try again.", "danger")
             return redirect(url_for("login"))
 
-        conn = get_db()
-        cur = conn.cursor()
-        cur.execute("SELECT * FROM users WHERE email = ?", (email,))
-        user = cur.fetchone()
-        conn.close()
-
-        if user and check_password_hash(user["password_hash"], password):
-            session["user_id"] = user["id"]
-            session["full_name"] = user["full_name"]
-            flash("Logged in successfully!", "success")
-            return redirect(url_for("dashboard"))
-
-        flash("Invalid credentials. Try again.", "danger")
-        return redirect(url_for("login"))
+        except Exception as e:
+            print("LOGIN ERROR:", e)
+            flash("Something went wrong. Please try again.", "danger")
+            return redirect(url_for("login"))
 
     return render_template("login.html")
 
@@ -168,8 +179,10 @@ def dashboard():
     cur.execute(query, params)
     apps = cur.fetchall()
 
-    # Counts
-    cur.execute("SELECT status, COUNT(*) as count FROM applications WHERE user_id = ? GROUP BY status", (user_id,))
+    cur.execute(
+        "SELECT status, COUNT(*) as count FROM applications WHERE user_id = ? GROUP BY status",
+        (user_id,)
+    )
     counts_rows = cur.fetchall()
     counts = {s: 0 for s in STATUSES}
     for row in counts_rows:
@@ -221,7 +234,11 @@ def new_application():
             INSERT INTO applications
             (user_id, company_name, role, status, applied_date, next_round_date, notes, resume_link, created_at, updated_at)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (session["user_id"], company_name, role, status, applied_date, next_round_date or None, notes, resume_link, now, now))
+        """, (
+            session["user_id"], company_name, role, status,
+            applied_date, next_round_date or None,
+            notes, resume_link, now, now
+        ))
         conn.commit()
         conn.close()
 
@@ -229,67 +246,6 @@ def new_application():
         return redirect(url_for("dashboard"))
 
     return render_template("application_form.html", mode="new", statuses=STATUSES, app_data=None)
-
-
-@app.route("/application/<int:app_id>/edit", methods=["GET", "POST"])
-def edit_application(app_id):
-    if not login_required():
-        return redirect(url_for("login"))
-
-    conn = get_db()
-    cur = conn.cursor()
-    cur.execute("SELECT * FROM applications WHERE id = ? AND user_id = ?", (app_id, session["user_id"]))
-    app_row = cur.fetchone()
-
-    if not app_row:
-        conn.close()
-        flash("Application not found.", "danger")
-        return redirect(url_for("dashboard"))
-
-    if request.method == "POST":
-        company_name = request.form.get("company_name", "").strip()
-        role = request.form.get("role", "").strip()
-        status = request.form.get("status", "").strip()
-        applied_date = request.form.get("applied_date", "").strip()
-        next_round_date = request.form.get("next_round_date", "").strip()
-        notes = request.form.get("notes", "").strip()
-        resume_link = request.form.get("resume_link", "").strip()
-
-        if not company_name or not role or not applied_date:
-            flash("Company name, role and applied date are required.", "danger")
-            return redirect(url_for("edit_application", app_id=app_id))
-
-        if status not in STATUSES:
-            status = "Applied"
-
-        cur.execute("""
-            UPDATE applications
-            SET company_name = ?, role = ?, status = ?, applied_date = ?, next_round_date = ?, notes = ?, resume_link = ?, updated_at = ?
-            WHERE id = ? AND user_id = ?
-        """, (company_name, role, status, applied_date, next_round_date or None, notes, resume_link, datetime.now().isoformat(), app_id, session["user_id"]))
-        conn.commit()
-        conn.close()
-
-        flash("Application updated!", "success")
-        return redirect(url_for("dashboard"))
-
-    conn.close()
-    return render_template("application_form.html", mode="edit", statuses=STATUSES, app_data=app_row)
-
-
-@app.route("/application/<int:app_id>/delete", methods=["POST"])
-def delete_application(app_id):
-    if not login_required():
-        return redirect(url_for("login"))
-
-    conn = get_db()
-    cur = conn.cursor()
-    cur.execute("DELETE FROM applications WHERE id = ? AND user_id = ?", (app_id, session["user_id"]))
-    conn.commit()
-    conn.close()
-
-    flash("Application deleted.", "info")
-    return redirect(url_for("dashboard"))
 
 
 @app.route("/export")
@@ -313,7 +269,11 @@ def export_csv():
     writer.writerow(["Company Name", "Role", "Status", "Applied Date", "Next Round Date", "Notes", "Resume Link"])
 
     for r in rows:
-        writer.writerow([r["company_name"], r["role"], r["status"], r["applied_date"], r["next_round_date"] or "", r["notes"] or "", r["resume_link"] or ""])
+        writer.writerow([
+            r["company_name"], r["role"], r["status"],
+            r["applied_date"], r["next_round_date"] or "",
+            r["notes"] or "", r["resume_link"] or ""
+        ])
 
     response = make_response(output.getvalue())
     response.headers["Content-Disposition"] = "attachment; filename=placement_applications.csv"
@@ -323,5 +283,5 @@ def export_csv():
 
 # ---------------- Main ----------------
 if __name__ == "__main__":
-    init_db()
-    app.run(debug=True)
+    app.run()
+
