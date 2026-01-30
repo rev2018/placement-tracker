@@ -20,14 +20,21 @@ STATUSES = ["Applied", "Test", "Interview", "Selected", "Rejected"]
 
 # ---------------- DB Helpers ----------------
 def get_db():
-    conn = sqlite3.connect(DB_NAME)
+    conn = sqlite3.connect(
+        DB_NAME,
+        check_same_thread=False,   # ✅ REQUIRED for Render/Gunicorn
+        timeout=10                 # ✅ Prevents database lock crashes
+    )
     conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA foreign_keys = ON")  # ✅ Prevent FK crashes
     return conn
 
 
 def init_db():
     conn = get_db()
     cur = conn.cursor()
+
+    cur.execute("PRAGMA foreign_keys = ON")
 
     cur.execute("""
         CREATE TABLE IF NOT EXISTS users (
