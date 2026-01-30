@@ -14,6 +14,7 @@ from werkzeug.security import generate_password_hash, check_password_hash
 app = Flask(__name__)
 app.secret_key = "replace-this-with-a-strong-secret-key"
 
+# Render-safe writable DB
 DB_NAME = "/tmp/placement_tracker.db"
 
 STATUSES = ["Applied", "Test", "Interview", "Selected", "Rejected"]
@@ -23,7 +24,6 @@ STATUSES = ["Applied", "Test", "Interview", "Selected", "Rejected"]
 def get_db():
     conn = sqlite3.connect(DB_NAME, timeout=10)
     conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA foreign_keys = ON")
     return conn
 
 
@@ -41,6 +41,7 @@ def init_db():
         )
     """)
 
+    # ❌ NO FOREIGN KEY (critical fix)
     cur.execute("""
         CREATE TABLE IF NOT EXISTS applications (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -53,8 +54,7 @@ def init_db():
             notes TEXT,
             resume_link TEXT,
             created_at TEXT NOT NULL,
-            updated_at TEXT NOT NULL,
-            FOREIGN KEY(user_id) REFERENCES users(id)
+            updated_at TEXT NOT NULL
         )
     """)
 
@@ -62,23 +62,12 @@ def init_db():
     conn.close()
 
 
-# ✅ Initialize DB ONCE safely
+# Initialize DB once
 @app.before_request
 def ensure_db():
     if not getattr(app, "_db_ready", False):
-        try:
-            init_db()
-            app._db_ready = True
-        except Exception as e:
-            print("DB INIT ERROR:", e)
-
-
-# ---------------- GLOBAL ERROR HANDLER ----------------
-@app.errorhandler(Exception)
-def handle_all_errors(e):
-    print("GLOBAL ERROR:", e)
-    flash("Something went wrong. Please try again.", "danger")
-    return redirect(url_for("login"))
+        init_db()
+        app._db_ready = True
 
 
 # ---------------- Auth Helper ----------------
@@ -121,6 +110,8 @@ def signup():
             flash("Account created! Please login.", "success")
             return redirect(url_for("login"))
 
+        except sqlite3.IntegrityError:
+            flash("Email already registered.", "warning")
         except Exception as e:
             print("SIGNUP ERROR:", e)
             flash("Signup failed.", "danger")
@@ -195,10 +186,10 @@ def new_application():
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 session["user_id"],
-                request.form.get("company_name", ""),
-                request.form.get("role", ""),
+                request.form.get("company_name"),
+                request.form.get("role"),
                 request.form.get("status", "Applied"),
-                request.form.get("applied_date", ""),
+                request.form.get("applied_date"),
                 request.form.get("next_round_date"),
                 request.form.get("notes"),
                 request.form.get("resume_link"),
@@ -262,3 +253,4 @@ def export_csv():
 # ---------------- Main ----------------
 if __name__ == "__main__":
     app.run()
+
