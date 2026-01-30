@@ -14,7 +14,6 @@ from werkzeug.security import generate_password_hash, check_password_hash
 app = Flask(__name__)
 app.secret_key = "replace-this-with-a-strong-secret-key"
 
-# Writable location on Render
 DB_NAME = "/tmp/placement_tracker.db"
 
 STATUSES = ["Applied", "Test", "Interview", "Selected", "Rejected"]
@@ -63,15 +62,23 @@ def init_db():
     conn.close()
 
 
-# ✅ SAFE: initialize DB only when the app actually receives traffic
+# ✅ Initialize DB ONCE safely
 @app.before_request
 def ensure_db():
-    if not hasattr(app, "_db_ready"):
+    if not getattr(app, "_db_ready", False):
         try:
             init_db()
             app._db_ready = True
         except Exception as e:
             print("DB INIT ERROR:", e)
+
+
+# ---------------- GLOBAL ERROR HANDLER ----------------
+@app.errorhandler(Exception)
+def handle_all_errors(e):
+    print("GLOBAL ERROR:", e)
+    flash("Something went wrong. Please try again.", "danger")
+    return redirect(url_for("login"))
 
 
 # ---------------- Auth Helper ----------------
@@ -117,7 +124,6 @@ def signup():
         except Exception as e:
             print("SIGNUP ERROR:", e)
             flash("Signup failed.", "danger")
-            return redirect(url_for("signup"))
 
     return render_template("signup.html")
 
@@ -256,4 +262,3 @@ def export_csv():
 # ---------------- Main ----------------
 if __name__ == "__main__":
     app.run()
-
