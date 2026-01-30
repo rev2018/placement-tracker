@@ -13,7 +13,9 @@ from werkzeug.security import generate_password_hash, check_password_hash
 # ---------------- App Setup ----------------
 app = Flask(__name__)
 app.secret_key = "replace-this-with-a-strong-secret-key"
-DB_NAME = "placement_tracker.db"
+
+# ✅ MUST be writable on Render
+DB_NAME = "/tmp/placement_tracker.db"
 
 STATUSES = ["Applied", "Test", "Interview", "Selected", "Rejected"]
 
@@ -65,13 +67,11 @@ def init_db():
     conn.close()
 
 
-# ✅ SAFE DB INIT (prevents startup crash on Render)
-@app.before_first_request
-def initialize_database():
-    try:
-        init_db()
-    except Exception as e:
-        print("DB INIT ERROR:", e)
+# ✅ Initialize DB immediately (Render-safe)
+try:
+    init_db()
+except Exception as e:
+    print("DB INIT ERROR:", e)
 
 
 # ---------------- Auth Helper ----------------
@@ -93,21 +93,17 @@ def home():
 @app.route("/signup", methods=["GET", "POST"])
 def signup():
     if request.method == "POST":
-        full_name = request.form.get("full_name", "").strip()
-        email = request.form.get("email", "").strip().lower()
-        password = request.form.get("password", "")
-
-        if not full_name or not email or not password:
-            flash("All fields are required.", "danger")
-            return redirect(url_for("signup"))
-
-        if len(password) < 6:
-            flash("Password must be at least 6 characters.", "danger")
-            return redirect(url_for("signup"))
-
-        pw_hash = generate_password_hash(password)
-
         try:
+            full_name = request.form["full_name"].strip()
+            email = request.form["email"].strip().lower()
+            password = request.form["password"]
+
+            if not full_name or not email or not password:
+                flash("All fields are required.", "danger")
+                return redirect(url_for("signup"))
+
+            pw_hash = generate_password_hash(password)
+
             conn = get_db()
             cur = conn.cursor()
             cur.execute(
@@ -120,10 +116,10 @@ def signup():
             flash("Account created! Please login.", "success")
             return redirect(url_for("login"))
 
-        except sqlite3.IntegrityError:
-            flash("Email already registered.", "warning")
-            return redirect(url_for("login"))
-
+        except Exception as e:
+            print("SIGNUP ERROR:", e)
+            flash("Signup failed.", "danger")
+            return redirect(url_for("signup"))
 
     return render_template("signup.html")
 
@@ -132,12 +128,8 @@ def signup():
 def login():
     if request.method == "POST":
         try:
-            email = request.form.get("email", "").strip().lower()
-            password = request.form.get("password", "")
-
-            if not email or not password:
-                flash("Email and password are required.", "danger")
-                return redirect(url_for("login"))
+            email = request.form["email"].strip().lower()
+            password = request.form["password"]
 
             conn = get_db()
             cur = conn.cursor()
@@ -156,7 +148,7 @@ def login():
 
         except Exception as e:
             print("LOGIN ERROR:", e)
-            flash("Login failed. Try again.", "danger")
+            flash("Login failed.", "danger")
             return redirect(url_for("login"))
 
     return render_template("login.html")
@@ -174,45 +166,16 @@ def dashboard():
     if not login_required():
         return redirect(url_for("login"))
 
-    user_id = session["user_id"]
-    search = request.args.get("search", "").strip()
-    status_filter = request.args.get("status", "").strip()
-
     conn = get_db()
     cur = conn.cursor()
-
-    query = "SELECT * FROM applications WHERE user_id = ?"
-    params = [user_id]
-
-    if search:
-        query += " AND (company_name LIKE ? OR role LIKE ?)"
-        params.extend([f"%{search}%", f"%{search}%"])
-
-    if status_filter in STATUSES:
-        query += " AND status = ?"
-        params.append(status_filter)
-
-    query += " ORDER BY updated_at DESC"
-    cur.execute(query, params)
+    cur.execute("SELECT * FROM applications WHERE user_id = ?", (session["user_id"],))
     apps = cur.fetchall()
-
-    cur.execute(
-        "SELECT status, COUNT(*) as count FROM applications WHERE user_id = ? GROUP BY status",
-        (user_id,)
-    )
-    rows = cur.fetchall()
-
-    counts = {s: 0 for s in STATUSES}
-    for r in rows:
-        counts[r["status"]] = r["count"]
-
     conn.close()
 
     return render_template(
         "dashboard.html",
         applications=apps,
-        statuses=STATUSES,
-        counts=counts
+        statuses=STATUSES
     )
 
 
@@ -223,21 +186,6 @@ def new_application():
 
     if request.method == "POST":
         try:
-            company_name = request.form.get("company_name", "").strip()
-            role = request.form.get("role", "").strip()
-            status = request.form.get("status", "").strip()
-            applied_date = request.form.get("applied_date", "").strip()
-            next_round_date = request.form.get("next_round_date", "").strip()
-            notes = request.form.get("notes", "").strip()
-            resume_link = request.form.get("resume_link", "").strip()
-
-            if not company_name or not role or not applied_date:
-                flash("Company, role and applied date are required.", "danger")
-                return redirect(url_for("new_application"))
-
-            if status not in STATUSES:
-                status = "Applied"
-
             now = datetime.now().isoformat()
 
             conn = get_db()
@@ -249,13 +197,13 @@ def new_application():
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 session["user_id"],
-                company_name,
-                role,
-                status,
-                applied_date,
-                next_round_date or None,
-                notes,
-                resume_link,
+                request.form["company_name"],
+                request.form["role"],
+                request.form["status"],
+                request.form["applied_date"],
+                request.form.get("next_round_date"),
+                request.form.get("notes"),
+                request.form.get("resume_link"),
                 now,
                 now
             ))
@@ -291,16 +239,21 @@ def export_csv():
 
     output = StringIO()
     writer = csv.writer(output)
-    writer.writerow(
-        ["Company", "Role", "Status", "Applied Date",
-         "Next Round Date", "Notes", "Resume Link"]
-    )
+    writer.writerow([
+        "Company", "Role", "Status",
+        "Applied Date", "Next Round Date",
+        "Notes", "Resume Link"
+    ])
 
     for r in rows:
         writer.writerow([
-            r["company_name"], r["role"], r["status"],
-            r["applied_date"], r["next_round_date"] or "",
-            r["notes"] or "", r["resume_link"] or ""
+            r["company_name"],
+            r["role"],
+            r["status"],
+            r["applied_date"],
+            r["next_round_date"] or "",
+            r["notes"] or "",
+            r["resume_link"] or ""
         ])
 
     response = make_response(output.getvalue())
@@ -312,3 +265,4 @@ def export_csv():
 # ---------------- Main ----------------
 if __name__ == "__main__":
     app.run()
+
