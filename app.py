@@ -14,7 +14,7 @@ from werkzeug.security import generate_password_hash, check_password_hash
 app = Flask(__name__)
 app.secret_key = "replace-this-with-a-strong-secret-key"
 
-# ✅ MUST be writable on Render
+# Writable location on Render
 DB_NAME = "/tmp/placement_tracker.db"
 
 STATUSES = ["Applied", "Test", "Interview", "Selected", "Rejected"]
@@ -22,11 +22,7 @@ STATUSES = ["Applied", "Test", "Interview", "Selected", "Rejected"]
 
 # ---------------- DB Helpers ----------------
 def get_db():
-    conn = sqlite3.connect(
-        DB_NAME,
-        check_same_thread=False,
-        timeout=10
-    )
+    conn = sqlite3.connect(DB_NAME, timeout=10)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
     return conn
@@ -67,11 +63,15 @@ def init_db():
     conn.close()
 
 
-# ✅ Initialize DB immediately (Render-safe)
-try:
-    init_db()
-except Exception as e:
-    print("DB INIT ERROR:", e)
+# ✅ SAFE: initialize DB only when the app actually receives traffic
+@app.before_request
+def ensure_db():
+    if not hasattr(app, "_db_ready"):
+        try:
+            init_db()
+            app._db_ready = True
+        except Exception as e:
+            print("DB INIT ERROR:", e)
 
 
 # ---------------- Auth Helper ----------------
@@ -85,18 +85,16 @@ def login_required():
 # ---------------- Routes ----------------
 @app.route("/")
 def home():
-    if "user_id" in session:
-        return redirect(url_for("dashboard"))
-    return redirect(url_for("login"))
+    return redirect(url_for("dashboard")) if "user_id" in session else redirect(url_for("login"))
 
 
 @app.route("/signup", methods=["GET", "POST"])
 def signup():
     if request.method == "POST":
         try:
-            full_name = request.form["full_name"].strip()
-            email = request.form["email"].strip().lower()
-            password = request.form["password"]
+            full_name = request.form.get("full_name", "").strip()
+            email = request.form.get("email", "").strip().lower()
+            password = request.form.get("password", "")
 
             if not full_name or not email or not password:
                 flash("All fields are required.", "danger")
@@ -128,8 +126,8 @@ def signup():
 def login():
     if request.method == "POST":
         try:
-            email = request.form["email"].strip().lower()
-            password = request.form["password"]
+            email = request.form.get("email", "").strip().lower()
+            password = request.form.get("password", "")
 
             conn = get_db()
             cur = conn.cursor()
@@ -144,12 +142,10 @@ def login():
                 return redirect(url_for("dashboard"))
 
             flash("Invalid credentials.", "danger")
-            return redirect(url_for("login"))
 
         except Exception as e:
             print("LOGIN ERROR:", e)
             flash("Login failed.", "danger")
-            return redirect(url_for("login"))
 
     return render_template("login.html")
 
@@ -172,11 +168,7 @@ def dashboard():
     apps = cur.fetchall()
     conn.close()
 
-    return render_template(
-        "dashboard.html",
-        applications=apps,
-        statuses=STATUSES
-    )
+    return render_template("dashboard.html", applications=apps, statuses=STATUSES)
 
 
 @app.route("/application/new", methods=["GET", "POST"])
@@ -197,10 +189,10 @@ def new_application():
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 session["user_id"],
-                request.form["company_name"],
-                request.form["role"],
-                request.form["status"],
-                request.form["applied_date"],
+                request.form.get("company_name", ""),
+                request.form.get("role", ""),
+                request.form.get("status", "Applied"),
+                request.form.get("applied_date", ""),
                 request.form.get("next_round_date"),
                 request.form.get("notes"),
                 request.form.get("resume_link"),
@@ -216,7 +208,6 @@ def new_application():
         except Exception as e:
             print("APPLICATION ERROR:", e)
             flash("Failed to save application.", "danger")
-            return redirect(url_for("new_application"))
 
     return render_template("application_form.html", mode="new", statuses=STATUSES)
 
