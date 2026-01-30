@@ -22,19 +22,17 @@ STATUSES = ["Applied", "Test", "Interview", "Selected", "Rejected"]
 def get_db():
     conn = sqlite3.connect(
         DB_NAME,
-        check_same_thread=False,   # ✅ REQUIRED for Render/Gunicorn
-        timeout=10                 # ✅ Prevents database lock crashes
+        check_same_thread=False,
+        timeout=10
     )
     conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA foreign_keys = ON")  # ✅ Prevent FK crashes
+    conn.execute("PRAGMA foreign_keys = ON")
     return conn
 
 
 def init_db():
     conn = get_db()
     cur = conn.cursor()
-
-    cur.execute("PRAGMA foreign_keys = ON")
 
     cur.execute("""
         CREATE TABLE IF NOT EXISTS users (
@@ -67,8 +65,13 @@ def init_db():
     conn.close()
 
 
-# Initialize DB at startup (Render-safe)
-init_db()
+# ✅ SAFE DB INIT (prevents startup crash on Render)
+@app.before_first_request
+def initialize_database():
+    try:
+        init_db()
+    except Exception as e:
+        print("DB INIT ERROR:", e)
 
 
 # ---------------- Auth Helper ----------------
@@ -120,6 +123,7 @@ def signup():
         except sqlite3.IntegrityError:
             flash("Email already registered.", "warning")
             return redirect(url_for("login"))
+
 
     return render_template("signup.html")
 
@@ -197,6 +201,7 @@ def dashboard():
         (user_id,)
     )
     rows = cur.fetchall()
+
     counts = {s: 0 for s in STATUSES}
     for r in rows:
         counts[r["status"]] = r["count"]
@@ -307,4 +312,3 @@ def export_csv():
 # ---------------- Main ----------------
 if __name__ == "__main__":
     app.run()
-
